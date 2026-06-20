@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+
+- Add `--compress`: deterministic caveman-style text compression (pure regex, no LLM,
+  no token cost) for `--full` and `--chapter` output. Drops articles/filler/pleasantries/
+  hedging/connective fluff; preserves code, inline code, URLs, file paths, numbers, and
+  proper nouns. `--full --compress` reports the before/after token delta.
+
 ## 0.1.0
 
 Initial release.

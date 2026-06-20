@@ -27,9 +27,18 @@ import os
 import sys
 import tempfile
 
+import caveman as caveman_mod
 import chunk as chunk_mod
 import extract as extract_mod
 import search as search_mod
+
+
+def _maybe_compress(chunks, enabled):
+    """Return (chunks, stats|None). When enabled, caveman-compress every chunk's
+    text deterministically (no LLM) and recount tokens with the same tokenizer."""
+    if not enabled:
+        return chunks, None
+    return caveman_mod.compress_chunks(chunks, chunk_mod.count_tokens)
 
 
 def _cache_dir(path: str, out_dir: str | None) -> str:
@@ -124,6 +133,12 @@ def main() -> int:
     ap.add_argument("--search", metavar="QUERY", help="Search chunks, print top matches")
     ap.add_argument("--chapter", type=int, metavar="N", help="Print full text of chunk N")
     ap.add_argument("--top-n", type=int, default=5, help="Results for --search")
+    ap.add_argument(
+        "--compress",
+        action="store_true",
+        help="Caveman-compress chunk text (deterministic, no LLM) to cut tokens "
+        "on --full / --chapter output. Preserves code, URLs, paths, numbers.",
+    )
     ap.add_argument("--json", action="store_true", help="Emit JSON instead of markdown")
     args = ap.parse_args()
 
@@ -162,12 +177,15 @@ def main() -> int:
         if not (0 <= n < len(chunks)):
             print(f"[read-book] ERROR: chunk {n} out of range 0-{len(chunks)-1}", file=sys.stderr)
             return 1
-        c = chunks[n]
+        c = dict(chunks[n])
+        if args.compress:
+            c["text"] = caveman_mod.compress_text(c["text"])
         if args.json:
             print(json.dumps(c, ensure_ascii=False, indent=2))
             return 0
         pr = f"p.{c['page_start']}-{c['page_end']}" if c.get("page_start") else "?"
-        print(f"# chunk {n} · {pr} · «{c['section']}»\n")
+        cc = " · caveman" if args.compress else ""
+        print(f"# chunk {n} · {pr} · «{c['section']}»{cc}\n")
         print(c["text"])
         return 0
 
@@ -177,8 +195,15 @@ def main() -> int:
 
     _print_report(args.book, chunks, toc, cache)
     if args.full:
+        body, stats = _maybe_compress(chunks, args.compress)
+        if stats:
+            print(
+                f"\n_Caveman-compressed: ~{stats['tokens_before']:,} → "
+                f"~{stats['tokens_after']:,} tokens "
+                f"(−{stats['percent_saved']}%). Code/URLs/paths preserved._"
+            )
         print("\n---\n## Full text\n")
-        for c in chunks:
+        for c in body:
             print(f"\n### chunk {c['index']} «{c['section']}»\n")
             print(c["text"])
     return 0

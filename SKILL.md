@@ -89,6 +89,27 @@ PDF strategy (PDF only):
 **Step 4 — answer, citing pages/sections.** Every chunk carries a page range and its
 section heading. Cite them (e.g. "§ Caching, p.41"). Ground claims in extracted text.
 
+## Cutting tokens on big books
+
+Two levers, use both:
+
+1. **Don't read the whole book.** This is the main lever. Use `--search` + `--chapter`
+   to pull only relevant chunks. For a summary, walk the TOC chapter by chapter and
+   summarize as you go — never `--full` a large book.
+2. **`--compress`** — caveman-compresses chunk text *deterministically* (pure regex,
+   **no LLM, no token cost**) before it reaches context. Drops articles / filler /
+   pleasantries / hedging / connective fluff; preserves code, inline `code`, URLs,
+   file paths, commands, numbers, and proper nouns exactly. Works with `--full` and
+   `--chapter`.
+   ```bash
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/read.py" "<path>" --chapter 12 --compress
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/read.py" "<path>" --full --compress
+   ```
+   Savings depend on the prose: verbose writing shrinks ~20-30%; dense technical
+   reference (lots of terms/commands/proper nouns, all preserved) shrinks less (~5%).
+   `--full --compress` prints the before/after token delta. Compression is lossy on
+   grammar but never on technical substance — for exact-quote work, read without it.
+
 ## Tuning
 
 - `--max-tokens N` — chunk size (default 1200). Lower for finer-grained search/citations.
@@ -116,6 +137,6 @@ modify the source file; persist anything outside the cache dir.
 
 **Bundled scripts:** `scripts/read.py` (entry), `scripts/extract.py` (unstructured router),
 `scripts/chunk.py` (token chunking + TOC), `scripts/search.py` (keyword search),
-`scripts/setup.py` (preflight + installer).
+`scripts/caveman.py` (deterministic `--compress` text shrink), `scripts/setup.py` (preflight + installer).
 
 Review scripts before first use to verify behavior.
