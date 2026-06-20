@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# read-book extraction caches (if a user points --out-dir into the repo)
+read-book-*/
+*.chunks.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# test artifacts
+_test/

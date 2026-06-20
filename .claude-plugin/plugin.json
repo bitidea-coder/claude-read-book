@@ -1,0 +1,12 @@
+{
+  "name": "read-book",
+  "version": "0.1.0",
+  "description": "Let Claude read a book or document. Extracts clean text from EPUB, PDF, HTML, Markdown, DOCX, and TXT with the unstructured library, chunks it into citable token-budgeted sections with a table of contents, and lets Claude search or read specific parts instead of dumping a whole book into context.",
+  "author": {
+    "name": "bitidea-coder"
+  },
+  "homepage": "https://github.com/bitidea-coder/claude-read-book",
+  "repository": "https://github.com/bitidea-coder/claude-read-book",
+  "license": "MIT",
+  "keywords": ["book", "read", "epub", "pdf", "html", "docx", "markdown", "unstructured", "document", "extraction", "rag", "chunking"]
+}

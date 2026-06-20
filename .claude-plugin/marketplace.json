@@ -1,0 +1,21 @@
+{
+  "name": "claude-read-book",
+  "metadata": {
+    "description": "Give Claude a book input. /read-book extracts EPUB/PDF/HTML/DOCX/MD/TXT, chunks with citations, and hands it to Claude."
+  },
+  "owner": {
+    "name": "bitidea-coder"
+  },
+  "plugins": [
+    {
+      "name": "read-book",
+      "description": "Read a book or document (EPUB, PDF, HTML, Markdown, DOCX, TXT). Extracts clean text with the unstructured library, chunks it with page/section citations, and searches or reads specific parts.",
+      "author": {
+        "name": "bitidea-coder"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/bitidea-coder/claude-read-book"
+    }
+  ]
+}
