@@ -91,24 +91,45 @@ section heading. Cite them (e.g. "§ Caching, p.41"). Ground claims in extracted
 
 ## Cutting tokens on big books
 
-Two levers, use both:
+Ranked by fidelity — **prefer the top lever; compression is a last resort.**
 
-1. **Don't read the whole book.** This is the main lever. Use `--search` + `--chapter`
-   to pull only relevant chunks. For a summary, walk the TOC chapter by chapter and
-   summarize as you go — never `--full` a large book.
-2. **`--compress`** — caveman-compresses chunk text *deterministically* (pure regex,
-   **no LLM, no token cost**) before it reaches context. Drops articles / filler /
-   pleasantries / hedging / connective fluff; preserves code, inline `code`, URLs,
-   file paths, commands, numbers, and proper nouns exactly. Works with `--full` and
-   `--chapter`.
+1. **Retrieval (lossless, the real answer).** Don't read the whole book — use
+   `--search` + `--chapter` to load only the relevant chunks in **full fidelity**.
+   For a summary, walk the TOC chapter by chapter. This gives Claude perfect,
+   complete information on what matters, which is what good development needs.
+   Never `--full` a large book.
+
+2. **LLM summarization (smart lossy).** For a whole-book digest, fan out an agent
+   per part; each reads its chapters and returns a dense summary that keeps meaning.
+   Costs tokens once; the extraction cache makes re-reads instant.
+
+3. **`--compress` (free but dumb — overflow only).** Deterministic caveman text
+   shrink (pure regex, **no LLM, no token cost**). Use ONLY to shave a chapter
+   that's already near a limit — not as the primary strategy.
+
+   It is built to **never drop information, only redundancy**:
+   - Drops articles + pure filler (just/really/very/basically…).
+   - **Remaps** logical connectives, never drops them: `however`→`but`,
+     `therefore`→`so`, `furthermore`→`also` — reasoning is preserved.
+   - **Never touches negation** (`not`/`never`/`no`/`cannot`) or, in safe mode,
+     **modality** (`you can` ≠ `use`; `must`/`may`/`might` kept).
+   - Protects code, inline `code`, URLs, file paths, numbers, proper nouns verbatim.
+
    ```bash
    python "${CLAUDE_PLUGIN_ROOT}/scripts/read.py" "<path>" --chapter 12 --compress
    python "${CLAUDE_PLUGIN_ROOT}/scripts/read.py" "<path>" --full --compress
+   python "${CLAUDE_PLUGIN_ROOT}/scripts/read.py" "<path>" --chapter 12 --compress-aggressive
    ```
-   Savings depend on the prose: verbose writing shrinks ~20-30%; dense technical
-   reference (lots of terms/commands/proper nouns, all preserved) shrinks less (~5%).
-   `--full --compress` prints the before/after token delta. Compression is lossy on
-   grammar but never on technical substance — for exact-quote work, read without it.
+
+   - `--compress` — **safe** level, near-lossless. Default choice.
+   - `--compress-aggressive` — also collapses modal framing (`you should`,
+     `there is`, `it is`). Higher savings, mild meaning shift; negation still kept.
+
+   **Reality check on savings:** verbose prose shrinks ~15-25%; dense technical
+   reference shrinks **only ~4-5%** — because nearly every word (terms, commands,
+   names, negations) carries information and is preserved by design. If a book
+   barely compresses, that is the signal to **retrieve, not compress.**
+   `--full` prints the before/after token delta. For exact quotes, read without it.
 
 ## Tuning
 

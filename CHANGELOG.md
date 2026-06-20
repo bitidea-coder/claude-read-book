@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.0
+
+Information-preserving compression rewrite. The 0.2.0 compressor dropped logical
+connectives ("however", "therefore", "furthermore") as fluff — a real information
+loss for technical/development books, where those words carry the reasoning. Fixed:
+
+- **Connectives are remapped, never dropped:** `however`→`but`, `therefore`→`so`,
+  `furthermore`→`also`. The logical relation survives in one token.
+- **Negation is never touched** (`not`/`never`/`no`/`cannot`), and in safe mode
+  **modality is preserved** (`you can use X` ≠ `use X`; `must`/`may`/`might` kept).
+- **Two levels:** `--compress` (safe, near-lossless — the default) and
+  `--compress-aggressive` (also collapses modal framing like `you should`/`there is`,
+  for mild extra savings; negation still kept).
+- Filler drop list narrowed to articles + pure intensifiers (`just`/`really`/`very`/
+  `basically`…); epistemic hedges (`usually`/`often`/`typically`) are kept.
+- Fixed leading-dot bug where space-before-punctuation cleanup ate the space in
+  tokens like ` .env` / ` .locked`.
+- SKILL.md now ranks token-saving levers by fidelity: **retrieval (lossless) first,
+  LLM summarization second, `--compress` last (overflow only).** Documents the
+  reality that dense technical reference compresses only ~4-5% — by design.
+
 ## 0.2.0
 
 - Add `--compress`: deterministic caveman-style text compression (pure regex, no LLM,

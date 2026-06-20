@@ -1,6 +1,6 @@
 {
   "name": "read-book",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Let Claude read a book or document. Extracts clean text from EPUB, PDF, HTML, Markdown, DOCX, and TXT with the unstructured library, chunks it into citable token-budgeted sections with a table of contents, and lets Claude search or read specific parts instead of dumping a whole book into context.",
   "author": {
     "name": "bitidea-coder"

@@ -33,12 +33,21 @@ import extract as extract_mod
 import search as search_mod
 
 
-def _maybe_compress(chunks, enabled):
-    """Return (chunks, stats|None). When enabled, caveman-compress every chunk's
-    text deterministically (no LLM) and recount tokens with the same tokenizer."""
-    if not enabled:
+def _compress_level(args):
+    """Resolve the requested caveman level from CLI flags, or None if off."""
+    if getattr(args, "compress_aggressive", False):
+        return "aggressive"
+    if getattr(args, "compress", False):
+        return "safe"
+    return None
+
+
+def _maybe_compress(chunks, level):
+    """Return (chunks, stats|None). When level is set, caveman-compress every
+    chunk's text deterministically (no LLM) and recount tokens."""
+    if not level:
         return chunks, None
-    return caveman_mod.compress_chunks(chunks, chunk_mod.count_tokens)
+    return caveman_mod.compress_chunks(chunks, chunk_mod.count_tokens, level=level)
 
 
 def _cache_dir(path: str, out_dir: str | None) -> str:
@@ -136,11 +145,20 @@ def main() -> int:
     ap.add_argument(
         "--compress",
         action="store_true",
-        help="Caveman-compress chunk text (deterministic, no LLM) to cut tokens "
-        "on --full / --chapter output. Preserves code, URLs, paths, numbers.",
+        help="Caveman-compress chunk text, SAFE level (deterministic, no LLM): "
+        "drops articles/filler, remaps connectives to short forms (however→but). "
+        "Near-lossless — keeps logic, negation, modality, code, URLs, paths, numbers.",
+    )
+    ap.add_argument(
+        "--compress-aggressive",
+        action="store_true",
+        help="Caveman-compress at AGGRESSIVE level: also collapses modal framing "
+        "(you should/there is/it is). Higher savings, mild meaning shift. "
+        "Implies --compress.",
     )
     ap.add_argument("--json", action="store_true", help="Emit JSON instead of markdown")
     args = ap.parse_args()
+    level = _compress_level(args)
 
     try:
         cache = _cache_dir(args.book, args.out_dir)
@@ -178,13 +196,13 @@ def main() -> int:
             print(f"[read-book] ERROR: chunk {n} out of range 0-{len(chunks)-1}", file=sys.stderr)
             return 1
         c = dict(chunks[n])
-        if args.compress:
-            c["text"] = caveman_mod.compress_text(c["text"])
+        if level:
+            c["text"] = caveman_mod.compress_text(c["text"], level=level)
         if args.json:
             print(json.dumps(c, ensure_ascii=False, indent=2))
             return 0
         pr = f"p.{c['page_start']}-{c['page_end']}" if c.get("page_start") else "?"
-        cc = " · caveman" if args.compress else ""
+        cc = f" · caveman:{level}" if level else ""
         print(f"# chunk {n} · {pr} · «{c['section']}»{cc}\n")
         print(c["text"])
         return 0
@@ -195,12 +213,12 @@ def main() -> int:
 
     _print_report(args.book, chunks, toc, cache)
     if args.full:
-        body, stats = _maybe_compress(chunks, args.compress)
+        body, stats = _maybe_compress(chunks, level)
         if stats:
             print(
-                f"\n_Caveman-compressed: ~{stats['tokens_before']:,} → "
+                f"\n_Caveman-compressed ({stats['level']}): ~{stats['tokens_before']:,} → "
                 f"~{stats['tokens_after']:,} tokens "
-                f"(−{stats['percent_saved']}%). Code/URLs/paths preserved._"
+                f"(−{stats['percent_saved']}%). Logic, negation, code, URLs, paths preserved._"
             )
         print("\n---\n## Full text\n")
         for c in body:

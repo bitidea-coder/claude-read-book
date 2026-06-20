@@ -1,16 +1,28 @@
 """Deterministic caveman-style text compression — no LLM, no network.
 
-Ports the caveman-compress rule set (drop articles / filler / pleasantries /
-hedging / connective fluff, collapse redundant phrasing) into pure regex so a
-whole book can be shrunk locally at zero token cost before any chunk reaches
-Claude's context.
+Shrinks prose locally (zero token cost) before chunks reach Claude's context.
+Designed around one rule: **never drop information, only redundancy.**
 
-Protected spans are never touched: fenced code blocks, inline `code`, URLs,
-and bare file paths. Everything else is natural-language prose and fair game.
+What that means concretely:
+  - Articles + pure filler (just/really/very/…) are dropped — zero propositional
+    content, the model reconstructs them for free.
+  - Logical connectives are NEVER dropped — they encode reasoning. Instead they
+    are remapped to a 1-token synonym that keeps the relation:
+        however/nevertheless → but   (contrast preserved)
+        therefore/thus/hence → so    (cause preserved)
+        furthermore/moreover → also  (addition preserved)
+  - Negation (not/never/no/cannot/…) is NEVER touched.
+  - Modality (you can/should/may/might/must) is preserved in `safe` mode, because
+    "you can use Redis" (option) ≠ "use Redis" (command).
+  - Code, inline `code`, URLs, and file paths are protected verbatim.
 
-Typical shrink on technical prose: ~20-35% tokens. Lossy by design (drops
-grammatical filler) but preserves all technical substance, numbers, names,
-code, and links.
+Two levels:
+  safe        (default) near-lossless: meaning identical, ~5-15% on prose.
+  aggressive  (opt-in)  also collapses modal framing (you should → imperative,
+              there is/it is → drop). Higher %, accepts mild meaning shift.
+
+Compression is a LAST resort for overflow — retrieval (--search/--chapter) is the
+real token lever and is lossless. See SKILL.md.
 """
 
 from __future__ import annotations
@@ -46,128 +58,184 @@ def _restore(text: str, spans: list[str]) -> str:
     return text
 
 
-# ---- word/phrase rules (case-insensitive, word-boundary safe) ----
+# ---- logical connectives: REMAP, never drop (preserves reasoning) ----
+# Applied in BOTH tiers. Replacement keeps the logical relation in 1 token.
 
-# Whole words to delete outright.
+_CONNECTIVES = {
+    "however": "but",
+    "nevertheless": "but",
+    "nonetheless": "but",
+    "conversely": "but",
+    "therefore": "so",
+    "thus": "so",
+    "hence": "so",
+    "consequently": "so",
+    "accordingly": "so",
+    "furthermore": "also",
+    "moreover": "also",
+    "additionally": "also",
+}
+_CONNECTIVE_RE = re.compile(
+    r"\b(" + "|".join(_CONNECTIVES) + r")\b", re.IGNORECASE
+)
+
+
+def _remap_connective(m: re.Match) -> str:
+    return _CONNECTIVES[m.group(1).lower()]
+
+
+# ---- pure filler: safe to drop in BOTH tiers (no propositional content) ----
+# NOTE: deliberately EXCLUDES hedges that carry epistemic info
+# (generally, usually, often, typically, roughly, somewhat, arguably, relatively)
+# and EXCLUDES negation and modality. Those change meaning.
+
 _DROP_WORDS = [
-    # articles
-    "a", "an", "the",
-    # filler / intensifiers
-    "just", "really", "basically", "actually", "simply", "essentially",
-    "generally", "very", "quite", "rather", "somewhat", "fairly",
-    "literally", "truly", "indeed", "certainly", "definitely",
-    # connective fluff
-    "however", "furthermore", "additionally", "moreover", "nonetheless",
-    "nevertheless", "thus", "therefore", "hence", "accordingly",
+    "a", "an", "the",          # articles
+    "just", "really", "actually", "simply", "basically",
+    "literally", "truly", "indeed", "very", "quite",
+    "certainly", "definitely",
 ]
-
-# Multi-word phrases collapsed to a shorter form (or dropped if "").
-_PHRASES = [
-    (r"in order to", "to"),
-    (r"make sure to", ""),
-    (r"make sure that", "ensure"),
-    (r"be sure to", ""),
-    (r"the reason is because", "because"),
-    (r"the reason why", "why"),
-    (r"due to the fact that", "because"),
-    (r"in spite of the fact that", "although"),
-    (r"with regard to", "re"),
-    (r"with respect to", "re"),
-    (r"in terms of", "in"),
-    (r"a number of", "several"),
-    (r"a large number of", "many"),
-    (r"the majority of", "most"),
-    (r"at this point in time", "now"),
-    (r"in the event that", "if"),
-    (r"it is important to note that", ""),
-    (r"it is worth noting that", ""),
-    (r"it should be noted that", ""),
-    (r"you should", ""),
-    (r"you need to", ""),
-    (r"you can", ""),
-    (r"you will", ""),
-    (r"there is", ""),
-    (r"there are", ""),
-    (r"it is", ""),
-    # single-word verbose -> short synonym
-    (r"utilize", "use"),
-    (r"utilizes", "uses"),
-    (r"utilizing", "using"),
-    (r"leverage", "use"),
-    (r"approximately", "~"),
-    (r"in addition", ""),
-    (r"as well as", "and"),
-    (r"such as", "like"),
-    (r"in conclusion", ""),
-    (r"for example", "e.g."),
-    (r"for instance", "e.g."),
-    (r"that is to say", "i.e."),
-]
-
 _DROP_RE = re.compile(
     r"\b(" + "|".join(re.escape(w) for w in _DROP_WORDS) + r")\b",
     re.IGNORECASE,
 )
-_PHRASE_RES = [
-    (re.compile(r"\b" + pat + r"\b", re.IGNORECASE), repl) for pat, repl in _PHRASES
+
+# ---- verbose phrases -> short equivalent: meaning-preserving, BOTH tiers ----
+# Concessive/conditional collapses keep the logic word (although/if/because).
+
+_PHRASES_SAFE = [
+    (r"in spite of the fact that", "although"),
+    (r"despite the fact that", "although"),
+    (r"due to the fact that", "because"),
+    (r"the reason is because", "because"),
+    (r"in the event that", "if"),
+    (r"at this point in time", "now"),
+    (r"a large number of", "many"),
+    (r"a number of", "several"),
+    (r"the majority of", "most"),
+    (r"with regard to", "about"),
+    (r"with respect to", "about"),
+    (r"the reason why", "why"),
+    (r"in order to", "to"),
+    (r"for example", "e.g."),
+    (r"for instance", "e.g."),
+    (r"that is to say", "i.e."),
+    (r"as well as", "and"),
+    (r"such as", "like"),
+    (r"make sure that", "ensure"),
+    (r"make sure to", ""),
+    (r"be sure to", ""),
+    (r"it is important to note that", ""),
+    (r"it is worth noting that", ""),
+    (r"it should be noted that", ""),
+    (r"utilizes", "uses"),
+    (r"utilizing", "using"),
+    (r"utilize", "use"),
+    (r"approximately", "~"),
+    (r"in addition", "also"),
 ]
 
+# ---- aggressive-only: collapses modal framing. Opt-in, mild meaning shift. ----
+# Excludes "you must" / "you may" / "you might" (necessity & possibility = info).
+
+_PHRASES_AGGRESSIVE = [
+    (r"you may want to", ""),
+    (r"you might want to", ""),
+    (r"you need to", ""),
+    (r"you have to", ""),
+    (r"you should", ""),
+    (r"you can", ""),
+    (r"you will", ""),
+    (r"there is", ""),
+    (r"there are", ""),
+    (r"there's", ""),
+    (r"it is", ""),
+]
+
+
+def _compile_phrases(pairs):
+    # Longest pattern first so specific multi-word phrases win over substrings.
+    pairs = sorted(pairs, key=lambda p: len(p[0]), reverse=True)
+    return [(re.compile(r"\b" + pat + r"\b", re.IGNORECASE), repl) for pat, repl in pairs]
+
+
+_SAFE_RES = _compile_phrases(_PHRASES_SAFE)
+_AGG_RES = _compile_phrases(_PHRASES_AGGRESSIVE)
+
+# ---- whitespace tidy ----
+
 _WS = re.compile(r"[ \t]{2,}")
-# Collapse space before sentence punctuation. Period/comma only when followed
-# by whitespace or end-of-string, so leading-dot tokens (".locked", ".env") and
-# decimals ("3 .14" never occurs but be safe) keep their preceding space.
+# Collapse space before sentence punctuation, but only for ,/. when followed by
+# whitespace/EOL so leading-dot tokens (".locked", ".env") keep their space.
 _SPACE_PUNCT = re.compile(r"\s+([;:!?])|\s+([,.])(?=\s|$)")
 _MULTI_NL = re.compile(r"\n{3,}")
 
 
 def _fix_space_punct(m: re.Match) -> str:
-    return (m.group(1) or m.group(2))
+    return m.group(1) or m.group(2)
 
 
-def compress_text(text: str) -> str:
-    """Compress prose. Protected code/URLs/paths pass through verbatim."""
+def compress_text(text: str, level: str = "safe") -> str:
+    """Compress prose. level: 'safe' (near-lossless) or 'aggressive'.
+
+    Protected code/URLs/paths pass through verbatim. Negation and (in safe mode)
+    modality are never altered. Logical connectives are remapped, never dropped.
+    """
+    if level not in ("safe", "aggressive"):
+        raise ValueError(f"level must be 'safe' or 'aggressive', got {level!r}")
+
     text, spans = _protect(text)
 
-    # Phrases first (some contain words we'd otherwise drop).
-    for rx, repl in _PHRASE_RES:
-        text = rx.sub(repl, text)
+    # 1. Remap connectives (both tiers) — preserve logic before any drop.
+    text = _CONNECTIVE_RE.sub(_remap_connective, text)
 
+    # 2. Phrase collapses (safe set always; aggressive set adds modal framing).
+    for rx, repl in _SAFE_RES:
+        text = rx.sub(repl, text)
+    if level == "aggressive":
+        for rx, repl in _AGG_RES:
+            text = rx.sub(repl, text)
+
+    # 3. Drop pure filler words (both tiers).
     text = _DROP_RE.sub("", text)
 
-    # Tidy whitespace the deletions left behind.
+    # 4. Tidy whitespace the deletions left behind.
     text = _WS.sub(" ", text)
     text = _SPACE_PUNCT.sub(_fix_space_punct, text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = _MULTI_NL.sub("\n\n", text)
-    # Drop spaces at line starts created by leading-word deletion.
     text = re.sub(r"\n[ \t]+", "\n", text)
     text = re.sub(r"^[ \t]+", "", text)
+    # NOTE: deliberately do NOT auto-recapitalize sentence starts. It would
+    # wrong-case lowercase tool names ("iptables" → "Iptables", "git" → "Git"),
+    # distorting technical content for a cosmetic gain. Lowercase sentence
+    # starts lose zero information — the model reads them fine.
 
     text = _restore(text, spans)
     return text.strip()
 
 
-def compress_chunks(chunks: list[dict], count_tokens) -> tuple[list[dict], dict]:
-    """Compress every chunk's text in place (new list), recount tokens.
+def compress_chunks(chunks: list[dict], count_tokens, level: str = "safe") -> tuple[list[dict], dict]:
+    """Compress every chunk's text (new list), recount tokens with `count_tokens`.
 
-    Returns (new_chunks, stats) where stats has before/after token totals.
-    `count_tokens` is injected to reuse the same tokenizer as chunk.py.
+    Returns (new_chunks, stats) with before/after token totals and the level used.
     """
     before = sum(c.get("tokens", 0) for c in chunks)
     out = []
     after = 0
     for c in chunks:
-        ctext = compress_text(c["text"])
+        ctext = compress_text(c["text"], level=level)
         toks = count_tokens(ctext)
         after += toks
         nc = dict(c)
         nc["text"] = ctext
         nc["tokens"] = toks
-        nc["compressed"] = True
+        nc["compressed"] = level
         out.append(nc)
     saved = before - after
     pct = (saved / before * 100) if before else 0.0
     return out, {
+        "level": level,
         "tokens_before": before,
         "tokens_after": after,
         "tokens_saved": saved,
